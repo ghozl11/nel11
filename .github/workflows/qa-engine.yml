@@ -1,16 +1,16 @@
-name: N-Labs Q&A Engine (Verbose Debug)
+name: N-Labs Q&A Engine (Zero OpEx)
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
-  workflow_dispatch:
+    - cron: '*/15 * * * *' # يعمل أوتوماتيكياً كل 15 دقيقة
+  workflow_dispatch: # زر للتشغيل اليدوي للاختبار
 
 jobs:
   sync-discord-notion:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
       
@@ -40,32 +40,60 @@ jobs:
           def sync_operations():
               print("--- STARTING N-LABS SYNC ENGINE ---")
               
-              # 1. فحص الاتصال بجدول المتدربين الأساسي
-              print(f"Connecting to Fellows Database ID: {FELLOWS_DB_ID}...")
-              f_res = requests.post(f"https://api.notion.com/v1/databases/{FELLOWS_DB_ID}/query", headers=NOTION_HEADERS)
+              # 1. إرسال ردود الـ Mentors من Notion إلى Discord
+              print("Checking for pending Mentor replies in Notion...")
+              reply_payload = {
+                  "filter": {
+                      "property": "Send Reply",
+                      "checkbox": {
+                          "equals": True
+                      }
+                  }
+              }
+              res_replies = requests.post(f"https://api.notion.com/v1/databases/{QA_DB_ID}/query", headers=NOTION_HEADERS, json=reply_payload).json()
               
-              if f_res.status_code != 200:
-                  print(f"❌ NOTION ERROR: Cannot access Fellows Database. Status: {f_res.status_code}")
-                  print(f"Response: {f_res.text}")
-                  return
+              results = res_replies.get("results", [])
+              print(f"Found {len(results)} pending replies to send.")
               
-              results = f_res.json().get("results", [])
-              print(f"✅ Notion Connected. Found {len(results)} records in Fellows Database.")
-              
-              for p in results:
-                  props = p.get("properties", {})
-                  # محاولة جلب اسم الطالب للتوثيق في الـ Logs
-                  student_name = "Unknown"
-                  for prop_name in ["Name", "الاسم", "Name ", "GitHub username"]:
-                      if prop_name in props and props[prop_name].get("title"):
-                          student_name = props[prop_name]["title"][0]["plain_text"]
-                          break
-                      elif prop_name in props and props[prop_name].get("rich_text"):
-                          if props[prop_name]["rich_text"]:
-                              student_name = props[prop_name]["rich_text"][0]["plain_text"]
-                              break
+              for page in results:
+                  page_id = page["id"]
+                  props = page["properties"]
+                  
+                  discord_uid_obj = props.get("Discord User ID", {}).get("rich_text", [])
+                  reply_obj = props.get("Mentor Reply", {}).get("rich_text", [])
+                  
+                  if discord_uid_obj and reply_obj:
+                      uid = discord_uid_obj[0]["plain_text"].strip()
+                      reply = reply_obj[0]["plain_text"]
+                      
+                      print(f"Sending reply to Discord User ID: {uid}...")
+                      # فتح قناة خاصة مع الطالب وإرسال الرد
+                      dm_res = requests.post("https://discord.com/api/v10/users/@me/channels", headers=DISCORD_HEADERS, json={"recipient_id": uid})
+                      if dm_res.status_code == 200:
+                          channel_id = dm_res.json()["id"]
+                          msg = f"✨ **N-Labs Mentor Reply:**\n\n{reply}"
+                          requests.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=DISCORD_HEADERS, json={"content": msg})
+                          print(f"✅ Reply sent successfully to DM.")
+                          
+                          # إزالة علامة الصح في Notion لمنع التكرار
+                          requests.patch(f"https://api.notion.com/v1/pages/{page_id}", headers=NOTION_HEADERS, json={"properties": {"Send Reply": {"checkbox": False}}})
+                      else:
+                          print(f"❌ Failed to open DM with user {uid}. Status: {dm_res.status_code}")
 
-                  uid_obj = props.get("Discord User ID", {}).get("rich_text", [])
+              # 2. سحب الأسئلة الجديدة من Discord إلى Notion
+              print(f"Connecting to Fellows Database ID...")
+              f_res = requests.post(f"https://api.notion.com/v1/databases/{FELLOWS_DB_ID}/query", headers=NOTION_HEADERS).json()
+              
+              for p in f_res.get("results", []):
+                  # جلب اسم الطالب للـ Logs
+                  student_name = "Unknown"
+                  name_props = p["properties"].get("Name", {}).get("title", [])
+                  if not name_props:
+                      name_props = p["properties"].get("🟢 Name", {}).get("title", [])
+                  if name_props:
+                      student_name = name_props[0]["plain_text"]
+                      
+                  uid_obj = p["properties"].get("Discord User ID", {}).get("rich_text", [])
                   if not uid_obj:
                       print(f"⚠️ Skipping student [{student_name}]: 'Discord User ID' column is empty.")
                       continue
@@ -73,34 +101,23 @@ jobs:
                   uid = uid_obj[0]["plain_text"].strip()
                   print(f"Processing student [{student_name}] with Discord UID: {uid}...")
                   
-                  # 2. محاولة فتح شات خاص عبر ديسكورد
                   dm_res = requests.post("https://discord.com/api/v10/users/@me/channels", headers=DISCORD_HEADERS, json={"recipient_id": uid})
-                  
                   if dm_res.status_code != 200:
-                      print(f"❌ DISCORD ERROR: Cannot open DM with UID {uid}. Status: {dm_res.status_code}")
-                      print(f"Response: {dm_res.text}")
+                      print(f"❌ Could not open DM channel for UID: {uid}")
                       continue
                   
                   channel_id = dm_res.json()["id"]
                   print(f"✅ DM Channel verified (ID: {channel_id}). Fetching recent messages...")
-                  
-                  # 3. جلب الرسائل
-                  msgs_res = requests.get(f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=5", headers=DISCORD_HEADERS)
-                  if msgs_res.status_code != 200:
-                      print(f"❌ DISCORD ERROR: Cannot fetch messages. Status: {msgs_res.status_code}")
-                      continue
-                      
-                  msgs = msgs_res.json()
-                  print(f"Found {len(msgs)} messages in DM history.")
+                  msgs = requests.get(f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=5", headers=DISCORD_HEADERS).json()
                   
                   if isinstance(msgs, list):
+                      print(f"Found {len(msgs)} messages in DM history.")
                       for m in msgs:
                           if m.get("author", {}).get("id") == uid:
                               msg_id = m["id"]
                               content = m["content"]
-                              print(f"📩 Found question from student: '{content}'")
                               
-                              # التحقق من عدم التكرار في جدول الأسئلة
+                              print(f"📩 Found question from student: '{content}'")
                               q_payload = {"filter": {"property": "Message ID", "rich_text": {"equals": msg_id}}}
                               q_res = requests.post(f"https://api.notion.com/v1/databases/{QA_DB_ID}/query", headers=NOTION_HEADERS, json=q_payload).json()
                               
@@ -115,8 +132,7 @@ jobs:
                                           "Message ID": {"rich_text": [{"text": {"content": msg_id}}]}
                                       }
                                   }
-                                  create_res = requests.post("https://api.notion.com/v1/pages", headers=NOTION_HEADERS, json=new_page)
-                                  print(f"Notion Page Creation Status: {create_res.status_code}")
+                                  requests.post("https://api.notion.com/v1/pages", headers=NOTION_HEADERS, json=new_page)
                               else:
                                   print("⏭️ Ticket already exists in Notion. Skipping.")
 
