@@ -40,7 +40,7 @@ jobs:
           }
 
           def send_resend_email(to_email, name, score, status, feedback):
-              # إرسال الإيميل عبر الـ API الحديث لـ Resend
+              # إرسال الإيميل عبر الـ API لـ Resend
               url = "https://api.resend.com/emails"
               headers = {
                   "Authorization": f"Bearer {RESEND_API_KEY}",
@@ -91,7 +91,7 @@ jobs:
               }
               
               res = requests.post(url, headers=headers, json=payload)
-              if res.status_code == 200 or res.status_code == 201:
+              if res.status_code in [200, 201]:
                   print(f"   📧 Resend Email sent successfully to {to_email}")
               else:
                   print(f"   ❌ Resend Email Failed: {res.text}")
@@ -109,10 +109,11 @@ jobs:
                   "footer": {"text": "N-Labs Operations Management Engine • Resend Pipeline"}
               }
               
+              # تم تصحيح الـ URL هنا إلى الـ Endpoint القياسي لديسكورد
               dm_res = requests.post("https://discord.com/api/v10/users/@me/channels", headers=DISCORD_HEADERS, json={"recipient_id": uid})
               if dm_res.status_code == 200:
                   channel_id = dm_res.json()["id"]
-                  res = requests.post(f"https://api.discord.com/v10/channels/{channel_id}/messages", headers=DISCORD_HEADERS, json={"embeds": [embed]})
+                  res = requests.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=DISCORD_HEADERS, json={"embeds": [embed]})
                   if res.status_code in [200, 201]:
                       print(f"   🟩 Discord Embed sent successfully to UID: {uid}")
                       return True
