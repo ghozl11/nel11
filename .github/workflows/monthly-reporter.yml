@@ -21,7 +21,7 @@ jobs:
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
         run: |
