@@ -1,9 +1,9 @@
-name: N-Labs Monthly Reporting Engine (Discord + Email)
+name: N-Labs Monthly Reporting Engine (Discord + Resend Email)
 
 on:
   schedule:
-    - cron: '0 10 1 * *' # يعمل أوتوماتيكياً يوم 1 في كل شهر الساعة 10 صباحاً
-  workflow_dispatch: # زر للتشغيل والتحكم اليدوي في أي وقت للاختبار
+    - cron: '0 10 1 * *' # أول كل شهر الساعة 10 صباحاً
+  workflow_dispatch: # تشغيل يدوّي للاختبار
 
 jobs:
   monthly-report:
@@ -20,16 +20,14 @@ jobs:
       - name: Create Reporting Script
         run: |
           cat << 'EOF' > monthly_reporter.py
-          import os, requests, smtplib
-          from email.mime.text import MIMEText
-          from email.mime.multipart import MIMEMultipart
+          import os, requests
 
-          # جلب المتغيرات السرية
+          # جلب المتغيرات السرية الجديدة
           NOTION_TOKEN = os.getenv("NOTION_TOKEN")
           FELLOWS_DB_ID = os.getenv("NOTION_DATABASE_ID")
           DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
           EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-          EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
+          RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
           NOTION_HEADERS = {
               "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -41,19 +39,20 @@ jobs:
               "Content-Type": "application/json"
           }
 
-          def send_email_report(to_email, name, score, status, feedback):
-              msg = MIMEMultipart('alternative')
-              msg['Subject'] = f"🏆 Nature Eye Labs | Monthly Evaluation Report - {name}"
-              msg['From'] = EMAIL_SENDER
-              msg['To'] = to_email
-
-              # تصميم قالب الإيميل بصيغة HTML احترافية وعصرية
-              html = f"""
+          def send_resend_email(to_email, name, score, status, feedback):
+              # إرسال الإيميل عبر الـ API الحديث لـ Resend
+              url = "https://api.resend.com/emails"
+              headers = {
+                  "Authorization": f"Bearer {RESEND_API_KEY}",
+                  "Content-Type": "application/json"
+              }
+              
+              html_content = f"""
               <html>
                 <body style="font-family: Arial, sans-serif; background-color: #f9f9f9; padding: 20px; direction: rtl; text-align: right;">
                   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; border: 1px solid #e0e0e0; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
                     <div style="background-color: #0f172a; padding: 20px; text-align: center; color: #ffffff;">
-                      <h2 style="margin: 0; font-size: 22px; letter-spacing: 1px;">Nature Eye Labs</h2>
+                      <h2 style="margin: 0; font-size: 22px;">Nature Eye Labs</h2>
                       <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 14px;">تقرير الأداء والتقييم الشهري</p>
                     </div>
                     <div style="padding: 30px; color: #334155; line-height: 1.6;">
@@ -83,44 +82,46 @@ jobs:
                 </body>
               </html>
               """
-              msg.attach(MIMEText(html, 'html'))
               
-              try:
-                  with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-                      server.login(EMAIL_SENDER, EMAIL_APP_PASSWORD)
-                      server.sendmail(EMAIL_SENDER, to_email, msg.as_string())
-                  print(f"   📧 Email sent successfully to {to_email}")
-              except Exception as e:
-                  print(f"   ❌ Failed to send Email: {str(e)}")
+              payload = {
+                  "from": f"Nature Eye Labs <{EMAIL_SENDER}>",
+                  "to": [to_email],
+                  "subject": f"🏆 Nature Eye Labs | Monthly Evaluation Report - {name}",
+                  "html": html_content
+              }
+              
+              res = requests.post(url, headers=headers, json=payload)
+              if res.status_code == 200 or res.status_code == 201:
+                  print(f"   📧 Resend Email sent successfully to {to_email}")
+              else:
+                  print(f"   ❌ Resend Email Failed: {res.text}")
 
           def send_discord_embed(uid, name, score, status, feedback):
-              # بناء كارت Discord Embed فخم واحترافي بنفس الداتا
               embed = {
                   "title": "🟩 Nature Eye Labs | Monthly Evaluation Report",
                   "description": f"أهلاً يا بشمهندس **{name}**، إليك حصاد أدائك وتقييمك خلال الشهر الماضي:",
-                  "color": 65280, # اللون الأخضر
+                  "color": 65280,
                   "fields": [
                       {"name": "📊 Monthly Score", "value": f"**{score}%**", "inline": True},
                       {"name": "🌟 Status", "value": f"**{status}**", "inline": True},
                       {"name": "💡 Mentor's Note", "value": f"*{feedback}*", "inline": False}
                   ],
-                  "footer": {"text": "N-Labs Operations Management Engine • Zero OpEx Pipeline"}
+                  "footer": {"text": "N-Labs Operations Management Engine • Resend Pipeline"}
               }
               
               dm_res = requests.post("https://discord.com/api/v10/users/@me/channels", headers=DISCORD_HEADERS, json={"recipient_id": uid})
               if dm_res.status_code == 200:
                   channel_id = dm_res.json()["id"]
-                  res = requests.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=DISCORD_HEADERS, json={"embeds": [embed]})
-                  if res.status_code == 200 or res.status_code == 201:
+                  res = requests.post(f"https://api.discord.com/v10/channels/{channel_id}/messages", headers=DISCORD_HEADERS, json={"embeds": [embed]})
+                  if res.status_code in [200, 201]:
                       print(f"   🟩 Discord Embed sent successfully to UID: {uid}")
                       return True
               print(f"   ❌ Failed to send Discord Embed to UID: {uid}")
               return False
 
           def run_reporting_engine():
-              print("--- INITIATING MONTHLY REPORTING DISTRIBUTOR ---")
+              print("--- INITIATING UPGRADED MONTHLY REPORTING DISTRIBUTOR ---")
               
-              # جلب الطلاب المطلوب إرسال تقارير لهم
               payload = {"filter": {"property": "Send Monthly Report", "checkbox": {"equals": True}}}
               res = requests.post(f"https://api.notion.com/v1/databases/{FELLOWS_DB_ID}/query", headers=NOTION_HEADERS, json=payload).json()
               
@@ -131,7 +132,6 @@ jobs:
                   page_id = page["id"]
                   props = page["properties"]
                   
-                  # جلب البيانات الأساسية والتحقق منها
                   name_obj = props.get("Name", {}).get("title", []) or props.get("🟢 Name", {}).get("title", [])
                   name = name_obj[0]["plain_text"] if name_obj else "Student"
                   
@@ -149,13 +149,11 @@ jobs:
                   
                   print(f"\nProcessing Report for [{name}]...")
                   
-                  # تنفيذ الإرسال المزدوج بناءً على توافر المعطيات
                   if uid:
                       send_discord_embed(uid, name, score, status, feedback)
                   if email:
-                      send_email_report(email, name, score, status, feedback)
+                      send_resend_email(email, name, score, status, feedback)
                       
-                  # إزالة علامة الصح أوتوماتيكياً بعد الإرسال لعدم التكرار
                   requests.patch(f"https://api.notion.com/v1/pages/{page_id}", headers=NOTION_HEADERS, json={"properties": {"Send Monthly Report": {"checkbox": False}}})
 
               print("\n--- MONTHLY REPORTING PROCESS COMPLETED ---")
@@ -170,5 +168,5 @@ jobs:
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: python monthly_reporter.py
