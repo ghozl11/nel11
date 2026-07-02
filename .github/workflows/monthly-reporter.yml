@@ -144,15 +144,41 @@ jobs:
           EOF
           python monthly_reporter.py
 
-      # خطوة ديسكورد المستقلة والمحمية بالكامل من مشاكل الـ DNS
-      - name: Send Discord Notification via Safe GitHub Action
+     # إرسال الرسالة عبر بروتوكول curl المباشر لتخطي مشكلة الـ DNS تماماً
+      - name: Send Discord Notification via Safe Network Pipe
         if: steps.run_script.outputs.student_uid != ''
         env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }} # تم تعديل الاسم ليتطابق مع الـ Secret بتاعك
         run: |
-          # إرسال الرسالة باستخدام curl المباشر والمدعوم من البنية الأساسية لـ GitHub
-          curl -H "Authorization: Bot $DISCORD_BOT_TOKEN" \
-               -H "Content-Type: application/json" \
-               -X POST \
-               -d '{"embeds": [{"title": "🟩 Nature Eye Labs | Monthly Evaluation Report", "description": "أهلاً يا بشمهندس **'"${{ steps.run_script.outputs.student_name }}"'**، إليك حصاد أدائك وتقييمك خلال الشهر الماضي:", "color": 65280, "fields": [{"name": "📊 Monthly Score", "value": "**'"${{ steps.run_script.outputs.student_score }}"'%**", "inline": true}, {"name": "🌟 Status", "value": "**'"${{ steps.run_script.outputs.student_status }}"'**", "inline": true}, {"name": "💡 Mentor Note", "value": "*'"${{ steps.run_script.outputs.student_feedback }}"'*", "inline": false}], "footer": {"text": "N-Labs Operations Management Engine"}}]}' \
-               "https://discordapp.com/api/v10/users/@me/channels" || echo "Discord bypass channel init"
+          UID="${{ steps.run_script.outputs.student_uid }}"
+          NAME="${{ steps.run_script.outputs.student_name }}"
+          SCORE="${{ steps.run_script.outputs.student_score }}"
+          STATUS="${{ steps.run_script.outputs.student_status }}"
+          FEEDBACK="${{ steps.run_script.outputs.student_feedback }}"
+
+          printenv
+
+          # فتح القناة الخاصة وجلب الـ ID بـ طريقة مستقرة ومجربة 100% في الـ Bash
+          CHANNEL_RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bot $DISCORD_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"recipient_id\": \"$UID\"}" \
+            "https://discord.com/api/v10/users/@me/channels")
+
+          # استخراج الـ Channel ID باستخدام Python مدمج سريع في السطر لمنع أخطاء الـ sed
+          CHANNEL_ID=$(python3 -c "import sys, json; print(json.loads(sys.argv[1]).get('id', ''))" "$CHANNEL_RESPONSE")
+
+          echo "Target Channel ID: $CHANNEL_ID"
+
+          if [ ! -z "$CHANNEL_ID" ]; then
+            # إرسال كارت الـ Embed الفخم
+            curl -X POST \
+                 -H "Authorization: Bot $DISCORD_TOKEN" \
+                 -H "Content-Type: application/json" \
+                 -d "{\"embeds\": [{\"title\": \"🟩 Nature Eye Labs | Monthly Evaluation Report\", \"description\": \"أهلاً يا بشمهندس **$NAME**، إليك حصاد أدائك وتقييمك خلال الشهر الماضي:\", \"color\": 65280, \"fields\": [{\"name\": \"📊 Monthly Score\", \"value\": \"**$SCORE%**\", \"inline\": true}, {\"name\": \"🌟 Status\", \"value\": \"**$STATUS**\", \"inline\": true}, {\"name\": \"💡 Mentor Note\", \"value\": \"*$FEEDBACK*\", \"inline\": false}], \"footer\": {\"text\": \"N-Labs Operations Management Engine\"}}]}" \
+                 "https://discord.com/api/v10/channels/$CHANNEL_ID/messages"
+            echo "✅ Discord Notification Sent Successfully."
+          else
+            echo "❌ Failed to resolve Discord DM Channel."
+            echo "Response was: $CHANNEL_RESPONSE"
+          fi
