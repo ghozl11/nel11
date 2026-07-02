@@ -2,8 +2,8 @@ name: N-Labs Monthly Reporting Engine (Discord + Resend Email)
 
 on:
   schedule:
-    - cron: '0 10 1 * *' # أول كل شهر الساعة 10 صباحاً
-  workflow_dispatch: # تشغيل يدوّي للاختبار
+    - cron: '0 10 1 * *'
+  workflow_dispatch:
 
 jobs:
   monthly-report:
@@ -17,25 +17,31 @@ jobs:
       - name: Install Dependencies
         run: pip install requests
         
-      - name: Create and Run Reporting Script
-        id: run_script
+      - name: Execute Reporting Engine
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
         run: |
           cat << 'EOF' > monthly_reporter.py
-          import os, requests
+          import os, requests, time
 
           NOTION_TOKEN = os.getenv("NOTION_TOKEN")
           FELLOWS_DB_ID = os.getenv("NOTION_DATABASE_ID")
           RESEND_API_KEY = os.getenv("RESEND_API_KEY")
           EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+          DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
           NOTION_HEADERS = {
               "Authorization": f"Bearer {NOTION_TOKEN}",
               "Notion-Version": "2022-06-28",
+              "Content-Type": "application/json"
+          }
+          
+          DISCORD_HEADERS = {
+              "Authorization": f"Bot {DISCORD_TOKEN}",
               "Content-Type": "application/json"
           }
 
@@ -89,14 +95,47 @@ jobs:
                   "html": html_content
               }
               
-              res = requests.post(url, headers=headers, json=payload)
-              if res.status_code in [200, 201]:
-                  print(f"   📧 Resend Email sent successfully to {to_email}")
-              else:
-                  print(f"   ❌ Resend Email Failed: {res.text}")
+              try:
+                  res = requests.post(url, headers=headers, json=payload)
+                  if res.status_code in [200, 201]:
+                      print(f"   📧 Resend Email sent successfully to {to_email}")
+                  else:
+                      print(f"   ❌ Resend Email Failed: {res.text}")
+              except Exception as e:
+                  print(f"   ❌ Resend Email Error: {e}")
+
+          def send_discord_embed(uid, name, score, status, feedback):
+              embed = {
+                  "title": "🟩 Nature Eye Labs | Monthly Evaluation Report",
+                  "description": f"أهلاً يا بشمهندس **{name}**، إليك حصاد أدائك وتقييمك خلال الشهر الماضي:",
+                  "color": 65280,
+                  "fields": [
+                      {"name": "📊 Monthly Score", "value": f"**{score}%**", "inline": True},
+                      {"name": "🌟 Status", "value": f"**{status}**", "inline": True},
+                      {"name": "💡 Mentor Note", "value": f"*{feedback}*", "inline": False}
+                  ],
+                  "footer": {"text": "N-Labs Operations Management Engine"}
+              }
+              
+              try:
+                  # استخدام الـ URL المباشر النقي لتجنب مشاكل الـ DNS في سيرفرات جيتهب
+                  dm_res = requests.post("https://discord.com/api/v10/users/@me/channels", headers=DISCORD_HEADERS, json={"recipient_id": uid})
+                  if dm_res.status_code == 200:
+                      channel_id = dm_res.json()["id"]
+                      msg_res = requests.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=DISCORD_HEADERS, json={"embeds": [embed]})
+                      if msg_res.status_code in [200, 201]:
+                          print(f"   🟩 Discord Embed sent successfully to UID: {uid}")
+                          return True
+                      else:
+                          print(f"   ❌ Failed to send Discord Embed: {msg_res.text}")
+                  else:
+                      print(f"   ❌ Failed to open Discord DM: {dm_res.text}")
+              except Exception as e:
+                  print(f"   ❌ Discord Request Error: {e}")
+              return False
 
           def run_reporting_engine():
-              print("--- INITIATING UPGRADED MONTHLY REPORTING DISTRIBUTOR ---")
+              print("--- INITIATING ULTIMATE MONTHLY REPORTING DISTRIBUTOR ---")
               payload = {"filter": {"property": "Send Monthly Report", "checkbox": {"equals": True}}}
               res = requests.post(f"https://api.notion.com/v1/databases/{FELLOWS_DB_ID}/query", headers=NOTION_HEADERS, json=payload).json()
               
@@ -120,22 +159,23 @@ jobs:
                   email = email_obj if email_obj else None
                   score = score_obj if score_obj is not None else "N/A"
                   status = status_obj.get("name", "N/A") if status_obj else "N/A"
-                  feedback = feedback_obj[0]["plain_text"] if feedback_obj else "استمر في العمل الممتاز واطلب الدعم عند الحاجة."
+                  feedback = feedback_obj[0]["plain_text"] if feedback_obj else "استمر في العمل الممتاز."
                   
                   print(f"\nProcessing Report for [{name}]...")
                   
+                  # إرسال ديسكورد
+                  if uid:
+                      send_discord_embed(uid, name, score, status, feedback)
+                      
+                  # إرسال إيميل
                   if email:
                       send_resend_email(email, name, score, status, feedback)
-                  
-                  # تمرير البيانات لخطوة ديسكورد الخارجية لحل مشكلة الـ DNS
-                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                      f.write(f"student_name={name}\n")
-                      f.write(f"student_score={score}\n")
-                      f.write(f"student_status={status}\n")
-                      f.write(f"student_feedback={feedback}\n")
-                      f.write(f"student_uid={uid}\n")
                       
+                  # إزالة علامة الصح أوتوماتيكياً
                   requests.patch(f"https://api.notion.com/v1/pages/{page_id}", headers=NOTION_HEADERS, json={"properties": {"Send Monthly Report": {"checkbox": False}}})
+                  
+                  # فاصل زمني ثانية واحدة لمنع الحظر (Rate Limit) عند التوزيع الجماعي
+                  time.sleep(1)
 
               print("\n--- MONTHLY REPORTING PROCESS COMPLETED ---")
 
@@ -143,42 +183,3 @@ jobs:
               run_reporting_engine()
           EOF
           python monthly_reporter.py
-
-     # إرسال الرسالة عبر بروتوكول curl المباشر لتخطي مشكلة الـ DNS تماماً
-      - name: Send Discord Notification via Safe Network Pipe
-        if: steps.run_script.outputs.student_uid != ''
-        env:
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }} # تم تعديل الاسم ليتطابق مع الـ Secret بتاعك
-        run: |
-          UID="${{ steps.run_script.outputs.student_uid }}"
-          NAME="${{ steps.run_script.outputs.student_name }}"
-          SCORE="${{ steps.run_script.outputs.student_score }}"
-          STATUS="${{ steps.run_script.outputs.student_status }}"
-          FEEDBACK="${{ steps.run_script.outputs.student_feedback }}"
-
-          printenv
-
-          # فتح القناة الخاصة وجلب الـ ID بـ طريقة مستقرة ومجربة 100% في الـ Bash
-          CHANNEL_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bot $DISCORD_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"recipient_id\": \"$UID\"}" \
-            "https://discord.com/api/v10/users/@me/channels")
-
-          # استخراج الـ Channel ID باستخدام Python مدمج سريع في السطر لمنع أخطاء الـ sed
-          CHANNEL_ID=$(python3 -c "import sys, json; print(json.loads(sys.argv[1]).get('id', ''))" "$CHANNEL_RESPONSE")
-
-          echo "Target Channel ID: $CHANNEL_ID"
-
-          if [ ! -z "$CHANNEL_ID" ]; then
-            # إرسال كارت الـ Embed الفخم
-            curl -X POST \
-                 -H "Authorization: Bot $DISCORD_TOKEN" \
-                 -H "Content-Type: application/json" \
-                 -d "{\"embeds\": [{\"title\": \"🟩 Nature Eye Labs | Monthly Evaluation Report\", \"description\": \"أهلاً يا بشمهندس **$NAME**، إليك حصاد أدائك وتقييمك خلال الشهر الماضي:\", \"color\": 65280, \"fields\": [{\"name\": \"📊 Monthly Score\", \"value\": \"**$SCORE%**\", \"inline\": true}, {\"name\": \"🌟 Status\", \"value\": \"**$STATUS**\", \"inline\": true}, {\"name\": \"💡 Mentor Note\", \"value\": \"*$FEEDBACK*\", \"inline\": false}], \"footer\": {\"text\": \"N-Labs Operations Management Engine\"}}]}" \
-                 "https://discord.com/api/v10/channels/$CHANNEL_ID/messages"
-            echo "✅ Discord Notification Sent Successfully."
-          else
-            echo "❌ Failed to resolve Discord DM Channel."
-            echo "Response was: $CHANNEL_RESPONSE"
-          fi
