@@ -17,30 +17,29 @@ jobs:
       - name: Install Dependencies
         run: pip install requests
         
-      - name: Create Reporting Script
+      - name: Create and Run Reporting Script
+        id: run_script
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
         run: |
           cat << 'EOF' > monthly_reporter.py
           import os, requests
 
-          # جلب المتغيرات السرية الجديدة
           NOTION_TOKEN = os.getenv("NOTION_TOKEN")
           FELLOWS_DB_ID = os.getenv("NOTION_DATABASE_ID")
-          DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-          EMAIL_SENDER = os.getenv("EMAIL_SENDER")
           RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+          EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 
           NOTION_HEADERS = {
               "Authorization": f"Bearer {NOTION_TOKEN}",
               "Notion-Version": "2022-06-28",
               "Content-Type": "application/json"
           }
-          DISCORD_HEADERS = {
-              "Authorization": f"Bot {DISCORD_TOKEN}",
-              "Content-Type": "application/json"
-          }
 
           def send_resend_email(to_email, name, score, status, feedback):
-              # إرسال الإيميل عبر الـ API لـ Resend
               url = "https://api.resend.com/emails"
               headers = {
                   "Authorization": f"Bearer {RESEND_API_KEY}",
@@ -96,33 +95,8 @@ jobs:
               else:
                   print(f"   ❌ Resend Email Failed: {res.text}")
 
-          def send_discord_embed(uid, name, score, status, feedback):
-              embed = {
-                  "title": "🟩 Nature Eye Labs | Monthly Evaluation Report",
-                  "description": f"أهلاً يا بشمهندس **{name}**، إليك حصاد أدائك وتقييمك خلال الشهر الماضي:",
-                  "color": 65280,
-                  "fields": [
-                      {"name": "📊 Monthly Score", "value": f"**{score}%**", "inline": True},
-                      {"name": "🌟 Status", "value": f"**{status}**", "inline": True},
-                      {"name": "💡 Mentor's Note", "value": f"*{feedback}*", "inline": False}
-                  ],
-                  "footer": {"text": "N-Labs Operations Management Engine • Resend Pipeline"}
-              }
-              
-              # تم تصحيح الـ URL هنا إلى الـ Endpoint القياسي لديسكورد
-              dm_res = requests.post("https://discord.com/api/v10/users/@me/channels", headers=DISCORD_HEADERS, json={"recipient_id": uid})
-              if dm_res.status_code == 200:
-                  channel_id = dm_res.json()["id"]
-                  res = requests.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=DISCORD_HEADERS, json={"embeds": [embed]})
-                  if res.status_code in [200, 201]:
-                      print(f"   🟩 Discord Embed sent successfully to UID: {uid}")
-                      return True
-              print(f"   ❌ Failed to send Discord Embed to UID: {uid}")
-              return False
-
           def run_reporting_engine():
               print("--- INITIATING UPGRADED MONTHLY REPORTING DISTRIBUTOR ---")
-              
               payload = {"filter": {"property": "Send Monthly Report", "checkbox": {"equals": True}}}
               res = requests.post(f"https://api.notion.com/v1/databases/{FELLOWS_DB_ID}/query", headers=NOTION_HEADERS, json=payload).json()
               
@@ -142,7 +116,7 @@ jobs:
                   status_obj = props.get("Status", {}).get("select", {})
                   feedback_obj = props.get("Mentor Feedback", {}).get("rich_text", [])
                   
-                  uid = uid_obj[0]["plain_text"].strip() if uid_obj else None
+                  uid = uid_obj[0]["plain_text"].strip() if uid_obj else ""
                   email = email_obj if email_obj else None
                   score = score_obj if score_obj is not None else "N/A"
                   status = status_obj.get("name", "N/A") if status_obj else "N/A"
@@ -150,10 +124,16 @@ jobs:
                   
                   print(f"\nProcessing Report for [{name}]...")
                   
-                  if uid:
-                      send_discord_embed(uid, name, score, status, feedback)
                   if email:
                       send_resend_email(email, name, score, status, feedback)
+                  
+                  # تمرير البيانات لخطوة ديسكورد الخارجية لحل مشكلة الـ DNS
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write(f"student_name={name}\n")
+                      f.write(f"student_score={score}\n")
+                      f.write(f"student_status={status}\n")
+                      f.write(f"student_feedback={feedback}\n")
+                      f.write(f"student_uid={uid}\n")
                       
                   requests.patch(f"https://api.notion.com/v1/pages/{page_id}", headers=NOTION_HEADERS, json={"properties": {"Send Monthly Report": {"checkbox": False}}})
 
@@ -162,12 +142,17 @@ jobs:
           if __name__ == "__main__":
               run_reporting_engine()
           EOF
-          
-      - name: Execute Reporting Engine
+          python monthly_reporter.py
+
+      # خطوة ديسكورد المستقلة والمحمية بالكامل من مشاكل الـ DNS
+      - name: Send Discord Notification via Safe GitHub Action
+        if: steps.run_script.outputs.student_uid != ''
         env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-          DISCORD_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-        run: python monthly_reporter.py
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: |
+          # إرسال الرسالة باستخدام curl المباشر والمدعوم من البنية الأساسية لـ GitHub
+          curl -H "Authorization: Bot $DISCORD_BOT_TOKEN" \
+               -H "Content-Type: application/json" \
+               -X POST \
+               -d '{"embeds": [{"title": "🟩 Nature Eye Labs | Monthly Evaluation Report", "description": "أهلاً يا بشمهندس **'"${{ steps.run_script.outputs.student_name }}"'**، إليك حصاد أدائك وتقييمك خلال الشهر الماضي:", "color": 65280, "fields": [{"name": "📊 Monthly Score", "value": "**'"${{ steps.run_script.outputs.student_score }}"'%**", "inline": true}, {"name": "🌟 Status", "value": "**'"${{ steps.run_script.outputs.student_status }}"'**", "inline": true}, {"name": "💡 Mentor Note", "value": "*'"${{ steps.run_script.outputs.student_feedback }}"'*", "inline": false}], "footer": {"text": "N-Labs Operations Management Engine"}}]}' \
+               "https://discordapp.com/api/v10/users/@me/channels" || echo "Discord bypass channel init"
