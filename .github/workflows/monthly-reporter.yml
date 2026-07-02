@@ -1,0 +1,174 @@
+name: N-Labs Monthly Reporting Engine (Discord + Email)
+
+on:
+  schedule:
+    - cron: '0 10 1 * *' # يعمل أوتوماتيكياً يوم 1 في كل شهر الساعة 10 صباحاً
+  workflow_dispatch: # زر للتشغيل والتحكم اليدوي في أي وقت للاختبار
+
+jobs:
+  monthly-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install Dependencies
+        run: pip install requests
+        
+      - name: Create Reporting Script
+        run: |
+          cat << 'EOF' > monthly_reporter.py
+          import os, requests, smtplib
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+
+          # جلب المتغيرات السرية
+          NOTION_TOKEN = os.getenv("NOTION_TOKEN")
+          FELLOWS_DB_ID = os.getenv("NOTION_DATABASE_ID")
+          DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+          EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+          EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
+
+          NOTION_HEADERS = {
+              "Authorization": f"Bearer {NOTION_TOKEN}",
+              "Notion-Version": "2022-06-28",
+              "Content-Type": "application/json"
+          }
+          DISCORD_HEADERS = {
+              "Authorization": f"Bot {DISCORD_TOKEN}",
+              "Content-Type": "application/json"
+          }
+
+          def send_email_report(to_email, name, score, status, feedback):
+              msg = MIMEMultipart('alternative')
+              msg['Subject'] = f"🏆 Nature Eye Labs | Monthly Evaluation Report - {name}"
+              msg['From'] = EMAIL_SENDER
+              msg['To'] = to_email
+
+              # تصميم قالب الإيميل بصيغة HTML احترافية وعصرية
+              html = f"""
+              <html>
+                <body style="font-family: Arial, sans-serif; background-color: #f9f9f9; padding: 20px; direction: rtl; text-align: right;">
+                  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; border: 1px solid #e0e0e0; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                    <div style="background-color: #0f172a; padding: 20px; text-align: center; color: #ffffff;">
+                      <h2 style="margin: 0; font-size: 22px; letter-spacing: 1px;">Nature Eye Labs</h2>
+                      <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 14px;">تقرير الأداء والتقييم الشهري</p>
+                    </div>
+                    <div style="padding: 30px; color: #334155; line-height: 1.6;">
+                      <p style="font-size: 16px;">أهلاً يا بشمهندس <strong>{name}</strong>،</p>
+                      <p>نهنئك على مجهودك المستمر خلال الشهر الماضي في المبادرة. إليك تفاصيل تقييم الأداء الخاص بك:</p>
+                      
+                      <table style="width: 100%; border-collapse: collapse; margin: 20px 0; background-color: #f8fafc;">
+                        <tr style="border-bottom: 1px solid #e2e8f0;">
+                          <td style="padding: 12px; font-weight: bold; color: #475569;">النتيجة الشهرية:</td>
+                          <td style="padding: 12px; text-align: left; font-weight: bold; color: #0284c7;">{score}%</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #e2e8f0;">
+                          <td style="padding: 12px; font-weight: bold; color: #475569;">حالة التقييم العامة:</td>
+                          <td style="padding: 12px; text-align: left; font-weight: bold;">{status}</td>
+                        </tr>
+                      </table>
+                      
+                      <div style="background-color: #f1f5f9; border-right: 4px solid #0284c7; padding: 15px; margin-top: 20px; border-radius: 4px;">
+                        <h4 style="margin: 0 0 8px 0; color: #0f172a;">💡 تعليق الموجه (Mentor Feedback):</h4>
+                        <p style="margin: 0; font-style: italic; color: #475569;">"{feedback}"</p>
+                      </div>
+                    </div>
+                    <div style="background-color: #f8fafc; padding: 15px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0;">
+                      هذا البريد مرسل بشكل آلي من نظام إدارة العمليات الرقمية لـ Nature Eye Labs.
+                    </div>
+                  </div>
+                </body>
+              </html>
+              """
+              msg.attach(MIMEText(html, 'html'))
+              
+              try:
+                  with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                      server.login(EMAIL_SENDER, EMAIL_APP_PASSWORD)
+                      server.sendmail(EMAIL_SENDER, to_email, msg.as_string())
+                  print(f"   📧 Email sent successfully to {to_email}")
+              except Exception as e:
+                  print(f"   ❌ Failed to send Email: {str(e)}")
+
+          def send_discord_embed(uid, name, score, status, feedback):
+              # بناء كارت Discord Embed فخم واحترافي بنفس الداتا
+              embed = {
+                  "title": "🟩 Nature Eye Labs | Monthly Evaluation Report",
+                  "description": f"أهلاً يا بشمهندس **{name}**، إليك حصاد أدائك وتقييمك خلال الشهر الماضي:",
+                  "color": 65280, # اللون الأخضر
+                  "fields": [
+                      {"name": "📊 Monthly Score", "value": f"**{score}%**", "inline": True},
+                      {"name": "🌟 Status", "value": f"**{status}**", "inline": True},
+                      {"name": "💡 Mentor's Note", "value": f"*{feedback}*", "inline": False}
+                  ],
+                  "footer": {"text": "N-Labs Operations Management Engine • Zero OpEx Pipeline"}
+              }
+              
+              dm_res = requests.post("https://discord.com/api/v10/users/@me/channels", headers=DISCORD_HEADERS, json={"recipient_id": uid})
+              if dm_res.status_code == 200:
+                  channel_id = dm_res.json()["id"]
+                  res = requests.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=DISCORD_HEADERS, json={"embeds": [embed]})
+                  if res.status_code == 200 or res.status_code == 201:
+                      print(f"   🟩 Discord Embed sent successfully to UID: {uid}")
+                      return True
+              print(f"   ❌ Failed to send Discord Embed to UID: {uid}")
+              return False
+
+          def run_reporting_engine():
+              print("--- INITIATING MONTHLY REPORTING DISTRIBUTOR ---")
+              
+              # جلب الطلاب المطلوب إرسال تقارير لهم
+              payload = {"filter": {"property": "Send Monthly Report", "checkbox": {"equals": True}}}
+              res = requests.post(f"https://api.notion.com/v1/databases/{FELLOWS_DB_ID}/query", headers=NOTION_HEADERS, json=payload).json()
+              
+              fellows = res.get("results", [])
+              print(f"Found {len(fellows)} students selected for monthly reporting.")
+              
+              for page in fellows:
+                  page_id = page["id"]
+                  props = page["properties"]
+                  
+                  # جلب البيانات الأساسية والتحقق منها
+                  name_obj = props.get("Name", {}).get("title", []) or props.get("🟢 Name", {}).get("title", [])
+                  name = name_obj[0]["plain_text"] if name_obj else "Student"
+                  
+                  uid_obj = props.get("Discord User ID", {}).get("rich_text", [])
+                  email_obj = props.get("Email", {}).get("email")
+                  score_obj = props.get("Monthly Score", {}).get("number")
+                  status_obj = props.get("Status", {}).get("select", {})
+                  feedback_obj = props.get("Mentor Feedback", {}).get("rich_text", [])
+                  
+                  uid = uid_obj[0]["plain_text"].strip() if uid_obj else None
+                  email = email_obj if email_obj else None
+                  score = score_obj if score_obj is not None else "N/A"
+                  status = status_obj.get("name", "N/A") if status_obj else "N/A"
+                  feedback = feedback_obj[0]["plain_text"] if feedback_obj else "استمر في العمل الممتاز واطلب الدعم عند الحاجة."
+                  
+                  print(f"\nProcessing Report for [{name}]...")
+                  
+                  # تنفيذ الإرسال المزدوج بناءً على توافر المعطيات
+                  if uid:
+                      send_discord_embed(uid, name, score, status, feedback)
+                  if email:
+                      send_email_report(email, name, score, status, feedback)
+                      
+                  # إزالة علامة الصح أوتوماتيكياً بعد الإرسال لعدم التكرار
+                  requests.patch(f"https://api.notion.com/v1/pages/{page_id}", headers=NOTION_HEADERS, json={"properties": {"Send Monthly Report": {"checkbox": False}}})
+
+              print("\n--- MONTHLY REPORTING PROCESS COMPLETED ---")
+
+          if __name__ == "__main__":
+              run_reporting_engine()
+          EOF
+          
+      - name: Execute Reporting Engine
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+        run: python monthly_reporter.py
